@@ -10,9 +10,10 @@ Install:
 Run:
   python3 app.py
 
-API key:
-  - reads HOPX_API_KEY from the environment
-  - does not prompt for or save the API key
+First run:
+  - checks ~/.hopx_ssh/config.json
+  - if no API key, asks for it
+  - saves it
 
 Menu:
   1) create
@@ -159,22 +160,27 @@ def require_sdk() -> None:
 
 
 def setup_api_key() -> str:
-    # HopX quickstart: set HOPX_API_KEY in the environment and then
-    # Sandbox.create(template="code-interpreter") can be called without
-    # passing api_key explicitly.
-    api_key = os.getenv("HOPX_API_KEY", "").strip()
+    cfg = load_config()
+    if cfg.get("api_key"):
+        return str(cfg["api_key"])
+    if os.environ.get("HOPX_API_KEY"):
+        cfg["api_key"] = os.environ["HOPX_API_KEY"]
+        save_config(cfg)
+        return cfg["api_key"]
 
-    if not api_key:
-        bad("HOPX_API_KEY environment variable is not set.")
-        print()
-        print("Set it before starting:")
-        print(color("  export HOPX_API_KEY='your_hopx_api_key'", C.cyan))
-        print()
-        print("Then run:")
-        print(color("  python3 run.py", C.cyan))
+    banner()
+    warn("No API key found in ~/.hopx_ssh/config.json")
+    print("Paste your HopX API key. It will be saved locally.")
+    print(color("Tip: you can also set HOPX_API_KEY env var.\n", C.dim))
+    key = getpass.getpass("HopX API key: ").strip()
+    if not key:
+        bad("API key required")
         sys.exit(1)
-
-    return api_key
+    cfg["api_key"] = key
+    save_config(cfg)
+    ok("API key saved")
+    time.sleep(0.7)
+    return key
 
 
 def set_current(sandbox_id: str) -> None:
@@ -196,6 +202,13 @@ def set_cwd(sandbox_id: str, cwd: str) -> None:
     cfg = load_config()
     cfg.setdefault("cwd", {})[sandbox_id] = cwd
     save_config(cfg)
+
+
+def reset_api_key() -> None:
+    cfg = load_config()
+    cfg.pop("api_key", None)
+    save_config(cfg)
+    warn("API key removed. Restart script to login again.")
 
 
 # ---------- HopX helpers ----------
@@ -235,40 +248,26 @@ def parse_timeout_choice(raw: str) -> list[int]:
 
 def create(api_key: str) -> Any:
     require_sdk()
+    template = input(f"Template [{DEFAULT_TEMPLATE}]: ").strip() or DEFAULT_TEMPLATE
+    timeout_raw = input("Timeout seconds [max]: ").strip()
+    timeout_tries = parse_timeout_choice(timeout_raw)
 
-    template = (
-        input(f"Template [{DEFAULT_TEMPLATE}]: ").strip()
-        or DEFAULT_TEMPLATE
-    )
+    last_error: Optional[Exception] = None
+    for timeout in timeout_tries:
+        try:
+            info(f"creating sandbox template={template}, timeout={timeout}s ...")
+            sb = Sandbox.create(template=template, timeout_seconds=timeout, api_key=api_key)
+            set_current(sid_of(sb))
+            ok(f"created {sid_of(sb)}")
+            ok(f"accepted timeout: {timeout}s")
+            show_info(sb)
+            return sb
+        except Exception as e:
+            last_error = e
+            warn(f"timeout {timeout}s rejected/failed: {e}")
+            time.sleep(0.2)
 
-    info(f"creating sandbox template={template} ...")
-
-    # Exact flow from the supplied HopX quickstart:
-    # HOPX_API_KEY is read by the SDK from the environment.
-    # Therefore no api_key= argument is required here.
-    try:
-        sandbox = Sandbox.create(template=template)
-    except APIError as exc:
-        raise RuntimeError(f"HopX API error: {exc}") from exc
-    except ResourceLimitError as exc:
-        raise RuntimeError(f"Resource limit exceeded: {exc}") from exc
-    except Exception as exc:
-        raise RuntimeError(f"Could not create sandbox: {exc}") from exc
-
-    sid = sid_of(sandbox)
-    set_current(sid)
-
-    print()
-    ok(f"Sandbox created: {sid}")
-
-    try:
-        status = val(sandbox.get_info(), "status", "unknown")
-        ok(f"Status: {status}")
-    except Exception:
-        pass
-
-    show_info(sandbox)
-    return sandbox
+    raise RuntimeError(f"Could not create sandbox with any timeout. Last error: {last_error}")
 
 
 def list_sandboxes(api_key: str) -> list[Any]:
@@ -576,6 +575,7 @@ def menu(api_key: str) -> None:
         print("8) info")
         print("9) pause")
         print("10) resume")
+        print("11) change API key")
         print()
         choice = input(color("Choose: ", C.cyan)).strip().lower()
         try:
@@ -609,6 +609,9 @@ def menu(api_key: str) -> None:
             elif choice == "10":
                 action(api_key, "resume")
                 pause()
+            elif choice == "11":
+                reset_api_key()
+                return
             else:
                 warn("invalid choice")
                 time.sleep(0.8)
@@ -625,11 +628,7 @@ def menu(api_key: str) -> None:
 
 def main() -> None:
     require_sdk()
-
-    # Same authentication flow as the provided sample:
-    # Sandbox.create(..., api_key=os.getenv("HOPX_API_KEY"))
     api_key = setup_api_key()
-
     menu(api_key)
 
 
