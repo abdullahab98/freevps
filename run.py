@@ -159,13 +159,9 @@ def require_sdk() -> None:
 
 
 def setup_api_key() -> str:
-    """
-    Use the same API-key flow as the provided HopX sample:
-
-        api_key=os.getenv("HOPX_API_KEY")
-
-    No interactive API-key prompt and no local credential storage.
-    """
+    # HopX quickstart: set HOPX_API_KEY in the environment and then
+    # Sandbox.create(template="code-interpreter") can be called without
+    # passing api_key explicitly.
     api_key = os.getenv("HOPX_API_KEY", "").strip()
 
     if not api_key:
@@ -175,10 +171,11 @@ def setup_api_key() -> str:
         print(color("  export HOPX_API_KEY='your_hopx_api_key'", C.cyan))
         print()
         print("Then run:")
-        print(color("  python3 app.py", C.cyan))
+        print(color("  python3 run.py", C.cyan))
         sys.exit(1)
 
     return api_key
+
 
 def set_current(sandbox_id: str) -> None:
     cfg = load_config()
@@ -238,26 +235,40 @@ def parse_timeout_choice(raw: str) -> list[int]:
 
 def create(api_key: str) -> Any:
     require_sdk()
-    template = input(f"Template [{DEFAULT_TEMPLATE}]: ").strip() or DEFAULT_TEMPLATE
-    timeout_raw = input("Timeout seconds [max]: ").strip()
-    timeout_tries = parse_timeout_choice(timeout_raw)
 
-    last_error: Optional[Exception] = None
-    for timeout in timeout_tries:
-        try:
-            info(f"creating sandbox template={template}, timeout={timeout}s ...")
-            sb = Sandbox.create(template=template, timeout_seconds=timeout, api_key=api_key)
-            set_current(sid_of(sb))
-            ok(f"created {sid_of(sb)}")
-            ok(f"accepted timeout: {timeout}s")
-            show_info(sb)
-            return sb
-        except Exception as e:
-            last_error = e
-            warn(f"timeout {timeout}s rejected/failed: {e}")
-            time.sleep(0.2)
+    template = (
+        input(f"Template [{DEFAULT_TEMPLATE}]: ").strip()
+        or DEFAULT_TEMPLATE
+    )
 
-    raise RuntimeError(f"Could not create sandbox with any timeout. Last error: {last_error}")
+    info(f"creating sandbox template={template} ...")
+
+    # Exact flow from the supplied HopX quickstart:
+    # HOPX_API_KEY is read by the SDK from the environment.
+    # Therefore no api_key= argument is required here.
+    try:
+        sandbox = Sandbox.create(template=template)
+    except APIError as exc:
+        raise RuntimeError(f"HopX API error: {exc}") from exc
+    except ResourceLimitError as exc:
+        raise RuntimeError(f"Resource limit exceeded: {exc}") from exc
+    except Exception as exc:
+        raise RuntimeError(f"Could not create sandbox: {exc}") from exc
+
+    sid = sid_of(sandbox)
+    set_current(sid)
+
+    print()
+    ok(f"Sandbox created: {sid}")
+
+    try:
+        status = val(sandbox.get_info(), "status", "unknown")
+        ok(f"Status: {status}")
+    except Exception:
+        pass
+
+    show_info(sandbox)
+    return sandbox
 
 
 def list_sandboxes(api_key: str) -> list[Any]:
